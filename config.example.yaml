@@ -1,0 +1,45 @@
+# Copy this file to config.yaml and fill in your values.
+
+# SMTP settings for sending to Kindle
+# For Gmail: use an App Password (https://myaccount.google.com/apppasswords)
+smtp:
+  host: smtp.gmail.com
+  port: 587
+  username: you@gmail.com
+  password: your-app-password
+
+# Your Kindle's email address (found in Amazon account > Devices > Kindle)
+# IMPORTANT: Add your SMTP sender address to the Kindle "Approved Personal Document E-mail List"
+kindle_email: you@kindle.com
+
+# Sender email (must match SMTP username for most providers)
+sender_email: you@gmail.com
+
+# Scraping settings
+scraping:
+  # Delay between chapter requests (seconds) — be respectful
+  delay: 1.5
+  # Retry failed requests up to N times
+  max_retries: 3
+
+# Site-specific cookies for authenticated access.
+# For gongzicp.com: log in via your browser, then copy cookies from DevTools
+# (F12 → Application → Cookies) or export them.
+# At minimum you need the session/login token cookie.
+#
+# How to get your cookies:
+#   1. Log in to gongzicp.com in Chrome/Edge
+#   2. Press F12 → Application tab → Cookies → www.gongzicp.com
+#   3. Copy the cookie values below (the important ones are typically
+#      "SESSION" or "token" — copy all to be safe)
+#   4. Alternatively, in DevTools → Network tab, copy the full Cookie header
+#      from any request and paste it as the "raw" value.
+cookies:
+  gongzicp.com:
+    # Option A: individual cookie key-value pairs
+    # SESSION: "your-session-id"
+    # token: "your-token-value"
+    # user_id: "12345"
+
+    # Option B: paste the entire Cookie header string from DevTools
+    # raw: "SESSION=abc123; token=xyz456; user_id=12345"
