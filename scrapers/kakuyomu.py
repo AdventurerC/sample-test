@@ -23,10 +23,14 @@ class KakuyomuScraper(BaseScraper):
     def fetch_metadata(self, novel_url: str) -> NovelMetadata:
         soup = self.get_soup(novel_url)
 
-        title_tag = soup.select_one("#workTitle a, .NewBox_headerTitle__text")
+        title_tag = soup.select_one(
+            "#workTitle a, .NewBox_headerTitle__text, h1"
+        )
         title = title_tag.get_text(strip=True) if title_tag else "Unknown"
 
-        author_tag = soup.select_one("#workAuthor-activityName a, .partialGift__author")
+        author_tag = soup.select_one(
+            '#workAuthor-activityName a, .partialGift__author, a[href^="/users/"]'
+        )
         author = author_tag.get_text(strip=True) if author_tag else "Unknown"
 
         desc_tag = soup.select_one("#introduction, .NewBox_synopsis")
@@ -45,23 +49,31 @@ class KakuyomuScraper(BaseScraper):
 
     def fetch_chapter_list(self, novel_url: str) -> list[tuple[str, str]]:
         soup = self.get_soup(novel_url)
-        chapters: list[tuple[str, str]] = []
 
-        # Kakuyomu TOC: <a class="WorkTocSection_link__..." href="/works/.../episodes/...">
+        # Prefer the Apollo/Next.js data because the rendered TOC collapses
+        # long works into accordions, so only a handful of <a> links exist
+        # in the initial HTML.
+        chapters = self._chapters_from_apollo(soup, novel_url)
+        if chapters:
+            return chapters
+
+        # Fallback: DOM scrape (small works with fully-expanded TOC).
+        seen_urls: set[str] = set()
+        shortcut_labels = {"1話目から読む", "最新話から読む"}
+        dom_chapters: list[tuple[str, str]] = []
         for link in soup.select('a[href*="/episodes/"]'):
             href = link.get("href", "")
             if "/episodes/" not in href:
                 continue
             ch_title = link.get_text(strip=True)
             ch_url = urljoin(self.BASE, href)
-            if ch_title and (ch_title, ch_url) not in chapters:
-                chapters.append((ch_title, ch_url))
-
-        if not chapters:
-            # Fallback: try extracting from __NEXT_DATA__ JSON
-            chapters = self._chapters_from_next_data(soup, novel_url)
-
-        return chapters
+            if not ch_title or ch_url in seen_urls:
+                continue
+            if ch_title in shortcut_labels:
+                continue
+            seen_urls.add(ch_url)
+            dom_chapters.append((ch_title, ch_url))
+        return dom_chapters
 
     def fetch_chapter_content(self, chapter_url: str) -> str:
         soup = self.get_soup(chapter_url)
@@ -91,6 +103,64 @@ class KakuyomuScraper(BaseScraper):
         return "<p>(Could not extract chapter content.)</p>"
 
     # -- internal helpers ----------------------------------------------------
+
+    def _chapters_from_apollo(
+        self, soup, novel_url: str
+    ) -> list[tuple[str, str]]:
+        """Extract the full chapter list from the Apollo cache in __NEXT_DATA__.
+
+        The rendered TOC uses accordions, so many works only render a
+        handful of episode <a> tags. The Apollo state, however, always
+        contains every public episode via
+        ``Work.tableOfContentsV2 -> TableOfContentsChapter.episodeUnions``.
+        """
+        script = soup.select_one("script#__NEXT_DATA__")
+        if not script or not script.string:
+            return []
+        try:
+            data = json.loads(script.string)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+        apollo = (
+            data.get("props", {})
+            .get("pageProps", {})
+            .get("__APOLLO_STATE__")
+        )
+        if not isinstance(apollo, dict):
+            return []
+
+        work_id = novel_url.rstrip("/").split("/")[-1]
+        work = apollo.get(f"Work:{work_id}")
+        if not isinstance(work, dict):
+            return []
+
+        toc = work.get("tableOfContentsV2") or work.get("tableOfContents")
+        if not isinstance(toc, list):
+            return []
+
+        chapters: list[tuple[str, str]] = []
+        for toc_ref in toc:
+            toc_key = toc_ref.get("__ref") if isinstance(toc_ref, dict) else None
+            if not toc_key:
+                continue
+            toc_entry = apollo.get(toc_key)
+            if not isinstance(toc_entry, dict):
+                continue
+            for ep_ref in toc_entry.get("episodeUnions", []) or []:
+                ep_key = ep_ref.get("__ref") if isinstance(ep_ref, dict) else None
+                if not ep_key:
+                    continue
+                ep = apollo.get(ep_key)
+                if not isinstance(ep, dict):
+                    continue
+                ep_id = ep.get("id")
+                title = ep.get("title") or f"Episode {ep_id}"
+                if not ep_id:
+                    continue
+                url = f"{self.BASE}/works/{work_id}/episodes/{ep_id}"
+                chapters.append((title, url))
+        return chapters
 
     def _chapters_from_next_data(
         self, soup, novel_url: str

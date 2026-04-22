@@ -33,7 +33,7 @@ def send_to_kindle(
     msg = MIMEMultipart()
     msg["From"] = sender_email
     msg["To"] = kindle_email
-    msg["Subject"] = f"convert"  # 'convert' tells Amazon to convert if needed
+    msg["Subject"] = "convert"  # 'convert' tells Amazon to convert if needed
 
     msg.attach(MIMEText("Sent by webnovel-to-kindle.", "plain", "utf-8"))
 
@@ -41,9 +41,14 @@ def send_to_kindle(
         part = MIMEBase("application", "epub+zip")
         part.set_payload(f.read())
     encoders.encode_base64(part)
+    # RFC 2231 encoding for non-ASCII filenames. The (charset, language, value)
+    # tuple tells the email package to emit `filename*=utf-8''...` which is
+    # the standard way to preserve Unicode characters (e.g. Chinese) in
+    # Content-Disposition and is understood by Amazon's Send-to-Kindle service.
     part.add_header(
         "Content-Disposition",
-        f'attachment; filename="{epub_path.name}"',
+        "attachment",
+        filename=("utf-8", "", epub_path.name),
     )
     msg.attach(part)
 

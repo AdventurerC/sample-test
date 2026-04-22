@@ -7,11 +7,17 @@ email it to your Kindle.
 
 Usage
 -----
-  # Scrape + build EPUB only
+  # Scrape + build EPUB (auto-sends to Kindle if config.yaml is set up)
   python main.py "https://www.zhenhunxiaoshuo.com/modu/"
 
-  # Scrape + build EPUB + send to Kindle
+  # Force send (error out if SMTP config is missing)
   python main.py "https://www.zhenhunxiaoshuo.com/modu/" --send
+
+  # Skip Kindle send even if configured
+  python main.py "https://www.zhenhunxiaoshuo.com/modu/" --no-send
+
+  # Send an already-built EPUB without scraping
+  python main.py --send-only ./my-book.epub
 
   # Custom output directory
   python main.py "https://www.zhenhunxiaoshuo.com/modu/" -o ./books
@@ -74,9 +80,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Scrape a webnovel, build an EPUB, and optionally send to Kindle."
     )
-    parser.add_argument("url", help="URL of the novel's table-of-contents page")
+    parser.add_argument(
+        "url",
+        nargs="?",
+        help="URL of the novel's table-of-contents page (omit when using --send-only)",
+    )
     parser.add_argument(
         "-o", "--output", default=".", help="Directory to save the EPUB (default: .)"
+    )
+    parser.add_argument(
+        "--send-only",
+        metavar="EPUB_PATH",
+        help="Skip scraping and send an existing EPUB file to Kindle",
     )
     parser.add_argument(
         "--delay",
@@ -84,10 +99,19 @@ def main() -> None:
         default=None,
         help="Seconds to wait between chapter requests (default: from config or 1.5)",
     )
-    parser.add_argument(
+    send_group = parser.add_mutually_exclusive_group()
+    send_group.add_argument(
         "--send",
+        dest="send",
         action="store_true",
-        help="Send the EPUB to Kindle after building",
+        default=None,
+        help="Send the EPUB to Kindle after building (default: auto if SMTP is configured)",
+    )
+    send_group.add_argument(
+        "--no-send",
+        dest="send",
+        action="store_false",
+        help="Do not send the EPUB to Kindle, even if SMTP is configured",
     )
     parser.add_argument(
         "--config",
@@ -97,41 +121,59 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    delay = args.delay or config.get("scraping", {}).get("delay", 1.5)
 
-    # --- resolve cookies for this site --------------------------------------
-    cookies = _resolve_cookies(args.url, config)
+    if args.send_only:
+        epub_path = Path(args.send_only)
+        if not epub_path.exists():
+            print(f"EPUB not found: {epub_path}", file=sys.stderr)
+            sys.exit(1)
+        if args.send is False:
+            print("--send-only conflicts with --no-send.", file=sys.stderr)
+            sys.exit(1)
+        # Force send semantics for --send-only.
+        args.send = True
+    else:
+        if not args.url:
+            parser.error("url is required unless --send-only is used")
 
-    # --- scrape -------------------------------------------------------------
-    scraper = get_scraper(args.url, cookies=cookies)
-    try:
-        novel = scraper.scrape(args.url, delay=delay)
-    finally:
-        scraper.close()
+        delay = args.delay or config.get("scraping", {}).get("delay", 1.5)
 
-    if not novel.chapters:
-        print("No chapters found. Check the URL or the scraper selectors.", file=sys.stderr)
-        sys.exit(1)
+        # --- resolve cookies for this site ----------------------------------
+        cookies = _resolve_cookies(args.url, config)
 
-    # --- build EPUB ---------------------------------------------------------
-    epub_path = build_epub(novel, output_dir=args.output)
+        # --- scrape ---------------------------------------------------------
+        scraper = get_scraper(args.url, cookies=cookies)
+        try:
+            novel = scraper.scrape(args.url, delay=delay)
+        finally:
+            scraper.close()
+
+        if not novel.chapters:
+            print("No chapters found. Check the URL or the scraper selectors.", file=sys.stderr)
+            sys.exit(1)
+
+        # --- build EPUB -----------------------------------------------------
+        epub_path = build_epub(novel, output_dir=args.output)
 
     # --- send to Kindle -----------------------------------------------------
-    if args.send:
-        smtp = config.get("smtp", {})
-        kindle_email = config.get("kindle_email")
-        sender_email = config.get("sender_email")
+    smtp = config.get("smtp", {})
+    kindle_email = config.get("kindle_email")
+    sender_email = config.get("sender_email")
 
-        missing = []
-        if not smtp.get("host"):
-            missing.append("smtp.host")
-        if not smtp.get("password"):
-            missing.append("smtp.password")
-        if not kindle_email:
-            missing.append("kindle_email")
-        if not sender_email:
-            missing.append("sender_email")
+    missing = []
+    if not smtp.get("host"):
+        missing.append("smtp.host")
+    if not smtp.get("password"):
+        missing.append("smtp.password")
+    if not kindle_email:
+        missing.append("kindle_email")
+    if not sender_email:
+        missing.append("sender_email")
 
+    # Auto-send if config is complete and user didn't explicitly opt out.
+    if args.send is False:
+        should_send = False
+    elif args.send is True:
         if missing:
             print(
                 f"Cannot send: missing config keys: {', '.join(missing)}\n"
@@ -139,16 +181,28 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+        should_send = True
+    else:
+        # Default: auto-send if fully configured, otherwise skip silently.
+        should_send = not missing
+        if missing:
+            print(
+                f"Skipping Kindle send (missing config: {', '.join(missing)}). "
+                f"Use --send to force or configure config.yaml to enable auto-send."
+            )
 
-        send_to_kindle(
-            epub_path,
-            kindle_email=kindle_email,
-            sender_email=sender_email,
-            smtp_host=smtp["host"],
-            smtp_port=smtp.get("port", 587),
-            smtp_user=smtp.get("username", sender_email),
-            smtp_password=smtp["password"],
-        )
+    if should_send:
+        emails = [e.strip() for e in str(kindle_email).split(",") if e.strip()]
+        for email in emails:
+            send_to_kindle(
+                epub_path,
+                kindle_email=email,
+                sender_email=sender_email,
+                smtp_host=smtp["host"],
+                smtp_port=smtp.get("port", 587),
+                smtp_user=smtp.get("username", sender_email),
+                smtp_password=smtp["password"],
+            )
 
     print("Done.")
 
