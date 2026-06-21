@@ -7,13 +7,13 @@ email it to your Kindle.
 
 Usage
 -----
-  # Scrape + build EPUB (auto-sends to Kindle if config.yaml is set up)
+  # Scrape + build EPUB (does NOT send to Kindle by default)
   python main.py "https://www.zhenhunxiaoshuo.com/modu/"
 
-  # Force send (error out if SMTP config is missing)
+  # Send to Kindle (requires SMTP config in config.yaml)
   python main.py "https://www.zhenhunxiaoshuo.com/modu/" --send
 
-  # Skip Kindle send even if configured
+  # Explicit opt-out (same as default)
   python main.py "https://www.zhenhunxiaoshuo.com/modu/" --no-send
 
   # Send an already-built EPUB without scraping
@@ -104,14 +104,14 @@ def main() -> None:
         "--send",
         dest="send",
         action="store_true",
-        default=None,
-        help="Send the EPUB to Kindle after building (default: auto if SMTP is configured)",
+        default=False,
+        help="Send the EPUB to Kindle after building (default: do not send)",
     )
     send_group.add_argument(
         "--no-send",
         dest="send",
         action="store_false",
-        help="Do not send the EPUB to Kindle, even if SMTP is configured",
+        help="Do not send the EPUB to Kindle (this is the default)",
     )
     parser.add_argument(
         "--config",
@@ -156,6 +156,10 @@ def main() -> None:
         epub_path = build_epub(novel, output_dir=args.output)
 
     # --- send to Kindle -----------------------------------------------------
+    if not args.send:
+        print("Done. (Kindle send skipped; pass --send to email the EPUB.)")
+        return
+
     smtp = config.get("smtp", {})
     kindle_email = config.get("kindle_email")
     sender_email = config.get("sender_email")
@@ -170,39 +174,25 @@ def main() -> None:
     if not sender_email:
         missing.append("sender_email")
 
-    # Auto-send if config is complete and user didn't explicitly opt out.
-    if args.send is False:
-        should_send = False
-    elif args.send is True:
-        if missing:
-            print(
-                f"Cannot send: missing config keys: {', '.join(missing)}\n"
-                f"Copy config.example.yaml → config.yaml and fill in your values.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        should_send = True
-    else:
-        # Default: auto-send if fully configured, otherwise skip silently.
-        should_send = not missing
-        if missing:
-            print(
-                f"Skipping Kindle send (missing config: {', '.join(missing)}). "
-                f"Use --send to force or configure config.yaml to enable auto-send."
-            )
+    if missing:
+        print(
+            f"Cannot send: missing config keys: {', '.join(missing)}\n"
+            f"Copy config.example.yaml → config.yaml and fill in your values.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    if should_send:
-        emails = [e.strip() for e in str(kindle_email).split(",") if e.strip()]
-        for email in emails:
-            send_to_kindle(
-                epub_path,
-                kindle_email=email,
-                sender_email=sender_email,
-                smtp_host=smtp["host"],
-                smtp_port=smtp.get("port", 587),
-                smtp_user=smtp.get("username", sender_email),
-                smtp_password=smtp["password"],
-            )
+    emails = [e.strip() for e in str(kindle_email).split(",") if e.strip()]
+    for email in emails:
+        send_to_kindle(
+            epub_path,
+            kindle_email=email,
+            sender_email=sender_email,
+            smtp_host=smtp["host"],
+            smtp_port=smtp.get("port", 587),
+            smtp_user=smtp.get("username", sender_email),
+            smtp_password=smtp["password"],
+        )
 
     print("Done.")
 

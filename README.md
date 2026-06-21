@@ -51,13 +51,10 @@ Then edit `config.yaml` with your SMTP credentials, Kindle email, and any site c
 ## Usage
 
 ```powershell
-# Scrape + build EPUB + auto-send to Kindle (if SMTP configured)
+# Scrape + build EPUB (does NOT send to Kindle by default)
 python main.py "https://kakuyomu.jp/works/16818023214131449614"
 
-# Build EPUB only, don't send
-python main.py "https://www.gongzicp.com/novel-34376.html" --no-send
-
-# Force send; error out if SMTP is missing
+# Send to Kindle (requires SMTP config)
 python main.py "<url>" --send
 
 # Send a pre-built EPUB
@@ -67,18 +64,80 @@ python main.py --send-only ./my-book.epub
 python main.py "<url>" -o ./books --delay 2.0
 ```
 
+## Local novel database (zhenhunxiaoshuo only)
+
+A SQLite database (`novels.db`) of titles, authors, genres, and links scraped
+from zhenhunxiaoshuo.com. Schema: `(title, author, genre, link)`.
+
+### Populating the db
+
+```powershell
+# danmei TOC pages (chunai/, chunai2/ … chunai5/) — sets genre='danmei'
+python scrape_zhenhun_toc.py
+
+# baihe TOC (visits each novel page to extract 作者：xxx) — sets genre='baihe'
+python scrape_zhenhun_baihe.py
+
+# Author index (/作者/) — fills in everything else, genre left blank
+python scrape_zhenhun_authors.py
+```
+
+All three scripts are idempotent — re-running only inserts new rows.
+
+### Querying the db
+
+```powershell
+# Search by title / author / genre (substring by default; combinable)
+python query_novels.py --title 镇魂
+python query_novels.py --title "zhen hun"        # same book, searched by pinyin
+python query_novels.py --author priest
+python query_novels.py --author "mo xiang tong xiu"
+python query_novels.py --genre baihe
+python query_novels.py --title 魂 --exact
+```
+
+All searches on `--title` and `--author` automatically search both the original text and pinyin romanization.
+
+### Fetch a novel by title
+
+`fetch_novel.py` looks up a title in the db and runs `main.py` against its URL.
+Any extra args are forwarded verbatim to `main.py`:
+
+```powershell
+python fetch_novel.py 镇魂
+python fetch_novel.py 红白囍 --send
+python fetch_novel.py modu -o ./books --delay 2.0
+```
+
+If the title matches multiple rows, the script lists them and exits — refine
+the title or pass `--exact`.
+
+## Building an EPUB from a Stanford Encyclopedia of Philosophy article
+
+```powershell
+python sep_to_epub.py https://plato.stanford.edu/entries/causation-metaphysics/
+```
+
 ## Project layout
 
 ```
-main.py                 # CLI entry point
-epub_builder.py         # EPUB packaging (ebooklib)
-kindle_sender.py        # SMTP send to Kindle
+main.py                      # CLI entry point (scrape → EPUB → optional Kindle)
+epub_builder.py              # EPUB packaging (ebooklib)
+kindle_sender.py             # SMTP send to Kindle
+sep_to_epub.py               # One-off: Stanford Encyclopedia of Philosophy → EPUB
 scrapers/
-  base.py               # BaseScraper interface + NovelMetadata / Chapter
-  kakuyomu.py           # kakuyomu.jp (Next.js Apollo cache)
-  zhenhun.py            # zhenhunxiaoshuo.com (plain HTML)
-  gongzicp.py           # gongzicp.com (Playwright + AES-decrypt API)
-config.example.yaml     # template config
+  base.py                    # BaseScraper interface + NovelMetadata / Chapter
+  kakuyomu.py                # kakuyomu.jp (Next.js Apollo cache)
+  zhenhun.py                 # zhenhunxiaoshuo.com (plain HTML)
+  gongzicp.py                # gongzicp.com (Playwright + AES-decrypt API)
+scrape_zhenhun_toc.py        # Populate novels.db from chunai TOC pages
+scrape_zhenhun_baihe.py      # Populate novels.db from baihe TOC
+scrape_zhenhun_authors.py    # Populate novels.db from author index
+query_novels.py              # Search novels.db by title/author (both Chinese and pinyin)
+migrate_db.py                # One-time migration: adds pinyin columns to existing novels.db
+fetch_novel.py               # Look up title in novels.db → call main.py
+novels.db                    # SQLite db (title, author, title_pinyin, author_pinyin, genre, link)
+config.example.yaml          # template config
 requirements.txt
 ```
 
